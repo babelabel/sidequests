@@ -1,19 +1,29 @@
 import React, { useState } from 'react';
+import { Users, Copy } from 'lucide-react';
 import { supabase } from '../lib/supabase.js';
 import { CATEGORY_META, totalXP, getRank, getNextRank } from '../lib/xp.js';
 
 const serif = { fontFamily: "'Instrument Serif', serif", fontStyle: 'italic' };
 
-export default function ProfileScreen({ profile, onSignOut }) {
+export default function ProfileScreen({ profile, onSignOut, onOpenFriends }) {
   const [editing, setEditing] = useState(false);
   const [displayName, setDisplayName] = useState(profile.display_name || '');
   const [username, setUsername] = useState(profile.username);
   const [bio, setBio] = useState(profile.bio || '');
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const aura = totalXP(profile);
   const rank = getRank(aura);
   const nextRank = getNextRank(aura);
+
+  const copyCode = () => {
+    try {
+      navigator.clipboard.writeText(profile.friend_code || '');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  };
 
   const saveProfile = async () => {
     setSaving(true);
@@ -121,6 +131,31 @@ export default function ProfileScreen({ profile, onSignOut }) {
             </div>
           );
         })}
+      </div>
+
+      {/* Friend code + Friends button */}
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          onClick={copyCode}
+          className="rounded-2xl p-3 text-left"
+          style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}
+        >
+          <p className="text-[10px] uppercase tracking-widest" style={{ color: '#fbbf24' }}>Your code</p>
+          <p style={{ fontFamily: 'monospace', fontSize: '1.1rem', letterSpacing: '0.15em' }} className="mt-0.5">
+            {profile.friend_code || '------'}
+          </p>
+          <p className="text-[9px] mt-1" style={{ color: '#fbbf24' }}>
+            <Copy size={10} className="inline" /> {copied ? 'copied' : 'tap to copy'}
+          </p>
+        </button>
+        <button
+          onClick={onOpenFriends}
+          className="rounded-2xl p-3 text-left flex flex-col justify-between"
+          style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
+        >
+          <Users size={20} style={{ color: '#a1a1aa' }} />
+          <p style={serif} className="text-xl">Friends</p>
+        </button>
       </div>
 
       <button
