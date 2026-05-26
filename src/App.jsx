@@ -4,6 +4,7 @@ import AuthScreen from './screens/AuthScreen.jsx';
 import HomeScreen from './screens/HomeScreen.jsx';
 import QuestDetailScreen from './screens/QuestDetailScreen.jsx';
 import ProfileScreen from './screens/ProfileScreen.jsx';
+import FriendsScreen from './screens/FriendsScreen.jsx';
 import ExploreScreen from './screens/ExploreScreen.jsx';
 import GroupsScreen from './screens/GroupsScreen.jsx';
 import FeedScreen from './screens/FeedScreen.jsx';
@@ -25,6 +26,15 @@ export default function App() {
   const { user, profile, loading, refreshProfile } = useAuth();
   const [view, setView] = useState('home');
   const [activeQuestId, setActiveQuestId] = useState(null);
+  const [showFriends, setShowFriends] = useState(false);
+
+  // Wrap signOut to also reset local view state — prevents UI getting stuck
+  const handleSignOut = async () => {
+    await signOut();
+    setView('home');
+    setActiveQuestId(null);
+    setShowFriends(false);
+  };
 
   if (loading) {
     return (
@@ -38,7 +48,6 @@ export default function App() {
 
   if (!user) return <AuthScreen />;
 
-  // If user has no profile yet (still being created), show loading
   if (!profile) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: '#0a0a0b', color: '#fafaf9' }}>
@@ -49,7 +58,7 @@ export default function App() {
     );
   }
 
-  // Quest detail is a modal-style overlay
+  // Quest detail is a full-screen overlay
   if (activeQuestId) {
     return (
       <QuestDetailScreen
@@ -61,14 +70,32 @@ export default function App() {
     );
   }
 
+  // Friends screen is a sub-page of Profile
+  if (showFriends) {
+    return (
+      <div className="min-h-screen pb-20" style={{ background: '#0a0a0b', color: '#fafaf9' }}>
+        <div className="max-w-2xl mx-auto px-4 pt-4">
+          <FriendsScreen profile={profile} onClose={() => setShowFriends(false)} />
+        </div>
+        <BottomNav view={view} setView={(v) => { setShowFriends(false); setView(v); }} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen pb-20" style={{ background: '#0a0a0b', color: '#fafaf9' }}>
       <div className="max-w-2xl mx-auto px-4 pt-4">
         {view === 'home' && <HomeScreen profile={profile} onOpenQuest={setActiveQuestId} />}
         {view === 'explore' && <ExploreScreen profile={profile} onOpenQuest={setActiveQuestId} />}
-        {view === 'groups' && <GroupsScreen profile={profile} />}
+        {view === 'groups' && <GroupsScreen profile={profile} onOpenQuest={setActiveQuestId} />}
         {view === 'feed' && <FeedScreen profile={profile} />}
-        {view === 'profile' && <ProfileScreen profile={profile} onSignOut={signOut} />}
+        {view === 'profile' && (
+          <ProfileScreen
+            profile={profile}
+            onSignOut={handleSignOut}
+            onOpenFriends={() => setShowFriends(true)}
+          />
+        )}
       </div>
       <BottomNav view={view} setView={setView} />
     </div>
