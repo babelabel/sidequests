@@ -81,21 +81,40 @@ export async function getDailyQuests(profile) {
 
 /**
  * Accept a quest — creates a `quests` row for the user (and optionally a group).
- * Expires in 48 hours by default.
+ * For group quests, all group members become participants automatically.
+ * Expires in 48 hours by default (72 for group quests so everyone has time).
  */
 export async function acceptQuest({ templateId, ownerId, groupId = null, expiresInHours = 48 }) {
+  // Group flow: use the RPC that handles members + RLS correctly
+  if (groupId) {
+    const { data: questId, error } = await supabase.rpc('accept_quest_for_group', {
+      _template_id: templateId,
+      _group_id: groupId
+    });
+    if (error) throw error;
+    // Fetch the new quest with template joined for the UI
+    const { data: full } = await supabase
+      .from('quests')
+      .select('*, template:quest_templates(*)')
+      .eq('id', questId)
+      .single();
+    return full;
+  }
+
+  // Solo flow
   const expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000).toISOString();
   const { data, error } = await supabase
     .from('quests')
-    .insert({ template_id: templateId, owner_id: ownerId, group_id: groupId, expires_at: expiresAt })
+    .insert({ template_id: templateId, owner_id: ownerId, group_id: null, expires_at: expiresAt })
     .select('*, template:quest_templates(*)')
     .single();
   if (error) throw error;
 
-  // Add the owner as a participant
-  await supabase
+  // Add the owner as a participant (now allowed by the fixed RLS policy)
+  const { error: pErr } = await supabase
     .from('quest_participants')
     .insert({ quest_id: data.id, user_id: ownerId });
+  if (pErr) console.warn('quest_participants insert (non-fatal):', pErr);
 
   return data;
 }
