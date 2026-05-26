@@ -31,7 +31,8 @@ export default function ExploreScreen({ profile, onOpenQuest }) {
       const q = await acceptQuest({ templateId: template.id, ownerId: profile.id });
       onOpenQuest(q.id);
     } catch (e) {
-      alert('Could not accept: ' + e.message);
+      console.error('accept quest', e);
+      alert('Could not accept: ' + (e?.message || 'unknown error'));
     }
   };
 

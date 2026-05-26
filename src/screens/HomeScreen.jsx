@@ -41,8 +41,8 @@ export default function HomeScreen({ profile, onOpenQuest }) {
       setActive(a => [newQuest, ...a]);
       onOpenQuest(newQuest.id);
     } catch (e) {
-      console.error(e);
-      alert('Could not accept quest. Check console.');
+      console.error('accept quest', e);
+      alert('Could not accept quest: ' + (e?.message || 'unknown error'));
     }
   };
 
