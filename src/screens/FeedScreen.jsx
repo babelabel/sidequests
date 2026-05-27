@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Map as MapIcon, Grid3x3, Layers, ChevronLeft, ChevronRight, MessageCircle, X, Send, MapPin } from 'lucide-react';
 import { getFeed, getMapPins, toggleReaction, getPostComments, addComment } from '../lib/feed.js';
+import { getFriendLocations, updateMyLocation, stopSharingLocation } from '../lib/location.js';
+import { getCurrentLocation } from '../lib/photos.js';
 import { CATEGORY_META } from '../lib/xp.js';
 
 const serif = { fontFamily: "'Instrument Serif', serif", fontStyle: 'italic' };
@@ -531,18 +533,51 @@ function CommentsSheet({ post, profile, onClose }) {
 // ============================================================
 function MapView({ profile }) {
   const [pins, setPins] = useState([]);
+  const [friendLocations, setFriendLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedPin, setSelectedPin] = useState(null);
+  const [sharingLocation, setSharingLocation] = useState(profile.location_sharing || false);
+  const [locationBusy, setLocationBusy] = useState(false);
   const containerRef = useRef(null);
   const mapRef = useRef(null);
 
   useEffect(() => {
     (async () => {
-      const data = await getMapPins();
-      setPins(data);
+      const [pinData, friendData] = await Promise.all([
+        getMapPins(),
+        getFriendLocations()
+      ]);
+      setPins(pinData);
+      setFriendLocations(friendData);
       setLoading(false);
     })();
   }, []);
+
+  const toggleSharing = async () => {
+    setLocationBusy(true);
+    try {
+      if (sharingLocation) {
+        await stopSharingLocation();
+        setSharingLocation(false);
+      } else {
+        const loc = await getCurrentLocation();
+        if (!loc) {
+          alert('Could not get your location. Allow location permission and try again.');
+          setLocationBusy(false);
+          return;
+        }
+        await updateMyLocation(loc.lat, loc.lng);
+        setSharingLocation(true);
+        // Refresh friend locations after sharing toggled
+        const friendData = await getFriendLocations();
+        setFriendLocations(friendData);
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+    } finally {
+      setLocationBusy(false);
+    }
+  };
 
   // Initialize Leaflet map once pins are loaded
   useEffect(() => {
@@ -643,10 +678,84 @@ function MapView({ profile }) {
           .on('click', () => setSelectedPin(pin));
       });
 
-      // If we have multiple pins, fit bounds to show all
-      if (pins.length > 1) {
-        const bounds = L.latLngBounds(pins.map(p => [p.lat, p.lng]));
+      // Add friend last-seen pins (different visual: pulsing avatar dot)
+      friendLocations.forEach(friend => {
+        const initial = (friend.display_name || friend.username || '?')[0].toUpperCase();
+        const html = `<div style="
+          position: relative;
+          width: 44px;
+          height: 44px;
+        ">
+          <div style="
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            background: #fbbf24;
+            opacity: 0.25;
+            animation: sq-pulse 2s infinite;
+          "></div>
+          <div style="
+            position: absolute;
+            inset: 6px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #fbbf24, #f97316);
+            color: #0a0a0b;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 14px;
+            border: 2px solid #0a0a0b;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+          ">${initial}</div>
+        </div>`;
+        const icon = L.divIcon({
+          html,
+          className: 'sidequest-friend-pin',
+          iconSize: [44, 44],
+          iconAnchor: [22, 22]
+        });
+        L.marker([friend.lat, friend.lng], { icon })
+          .addTo(map)
+          .bindTooltip(`${friend.display_name || friend.username} · ${timeAgo(friend.updated_at)}`, {
+            direction: 'top',
+            offset: [0, -10],
+            className: 'sq-tooltip'
+          });
+      });
+
+      // Inject pulse animation CSS once
+      if (!document.getElementById('sq-pulse-style')) {
+        const style = document.createElement('style');
+        style.id = 'sq-pulse-style';
+        style.textContent = `
+          @keyframes sq-pulse {
+            0%, 100% { transform: scale(1); opacity: 0.25; }
+            50% { transform: scale(1.6); opacity: 0; }
+          }
+          .sq-tooltip {
+            background: rgba(10,10,11,0.95) !important;
+            color: #fafaf9 !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            font-size: 11px !important;
+            padding: 4px 8px !important;
+            border-radius: 8px !important;
+          }
+          .sq-tooltip::before { display: none !important; }
+        `;
+        document.head.appendChild(style);
+      }
+
+      // Fit bounds: include both photo pins AND friend pins
+      const allPoints = [
+        ...pins.map(p => [p.lat, p.lng]),
+        ...friendLocations.map(f => [f.lat, f.lng])
+      ];
+      if (allPoints.length > 1) {
+        const bounds = L.latLngBounds(allPoints);
         map.fitBounds(bounds, { padding: [40, 40] });
+      } else if (allPoints.length === 1) {
+        map.setView(allPoints[0], 14);
       }
 
       mapRef.current = map;
@@ -658,7 +767,7 @@ function MapView({ profile }) {
         mapRef.current = null;
       }
     };
-  }, [loading, pins]);
+  }, [loading, pins, friendLocations]);
 
   return (
     <div className="space-y-3">
@@ -672,15 +781,34 @@ function MapView({ profile }) {
         }}
       />
 
+      {/* Location sharing toggle */}
+      <button
+        onClick={toggleSharing}
+        disabled={locationBusy}
+        className="w-full rounded-2xl p-3 flex items-center justify-between text-sm"
+        style={{
+          background: sharingLocation ? 'rgba(251,191,36,0.1)' : 'rgba(255,255,255,0.04)',
+          border: `1px solid ${sharingLocation ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.08)'}`
+        }}
+      >
+        <span style={{ color: sharingLocation ? '#fbbf24' : '#fafaf9' }}>
+          {locationBusy ? '...' : sharingLocation ? '📍 Sharing your location' : '📍 Share my location with friends'}
+        </span>
+        <span className="text-xs" style={{ color: '#71717a' }}>
+          {sharingLocation ? 'Tap to stop' : 'Tap to share'}
+        </span>
+      </button>
+
       {loading ? (
         <p className="text-sm text-center" style={{ color: '#71717a' }}>Loading map…</p>
-      ) : pins.length === 0 ? (
+      ) : pins.length === 0 && friendLocations.length === 0 ? (
         <p className="text-sm text-center" style={{ color: '#71717a' }}>
-          No tagged posts yet. Tag a location when sharing a quest moment.
+          No tagged posts or friends on the map yet.
         </p>
       ) : (
         <p className="text-xs text-center" style={{ color: '#71717a' }}>
-          {pins.length} memor{pins.length === 1 ? 'y' : 'ies'} on the map
+          {pins.length} memor{pins.length === 1 ? 'y' : 'ies'}
+          {friendLocations.length > 0 && ` · ${friendLocations.length} friend${friendLocations.length === 1 ? '' : 's'} nearby`}
         </p>
       )}
 
