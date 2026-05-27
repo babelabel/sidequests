@@ -149,25 +149,22 @@ export async function createGroup({ name, emoji = '🌅' }) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not signed in');
 
-  // Try a few times in case of code collision (unlikely with 6 chars from 30 chars = ~700M combos)
+  // Try a few times in case of invite-code collision
   let attempts = 0;
   while (attempts < 5) {
     const inviteCode = generateInviteCode();
-    const { data, error } = await supabase
-      .from('groups')
-      .insert({ name: name.trim(), emoji, invite_code: inviteCode, created_by: user.id })
-      .select()
-      .single();
+    const { data, error } = await supabase.rpc('create_group_with_owner', {
+      _name: name.trim(),
+      _emoji: emoji,
+      _invite_code: inviteCode
+    });
 
     if (!error) {
-      // Add creator as owner-role member
-      await supabase
-        .from('group_members')
-        .insert({ group_id: data.id, user_id: user.id, role: 'owner' });
-      return data;
+      // RPC returns a single-row table — unwrap it
+      return (data && data[0]) || null;
     }
 
-    // If the error is a unique-constraint violation on invite_code, retry
+    // Unique constraint violation on invite_code? Try again.
     if (error.code !== '23505') throw error;
     attempts++;
   }

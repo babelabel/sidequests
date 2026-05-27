@@ -80,19 +80,18 @@ export async function getDailyQuests(profile) {
 }
 
 /**
- * Accept a quest — creates a `quests` row for the user (and optionally a group).
- * For group quests, all group members become participants automatically.
- * Expires in 48 hours by default (72 for group quests so everyone has time).
+ * Accept a quest — creates a `quests` row.
+ * Solo quests start in 'active' status (need to be explicitly started to begin timer).
+ * Group quests start in 'pending_group_consent' — all members must confirm before timer starts.
  */
-export async function acceptQuest({ templateId, ownerId, groupId = null, expiresInHours = 48 }) {
-  // Group flow: use the RPC that handles members + RLS correctly
+export async function acceptQuest({ templateId, ownerId, groupId = null }) {
+  // Group flow: use the RPC that handles members + RLS + consent
   if (groupId) {
     const { data: questId, error } = await supabase.rpc('accept_quest_for_group', {
       _template_id: templateId,
       _group_id: groupId
     });
     if (error) throw error;
-    // Fetch the new quest with template joined for the UI
     const { data: full } = await supabase
       .from('quests')
       .select('*, template:quest_templates(*)')
@@ -101,71 +100,106 @@ export async function acceptQuest({ templateId, ownerId, groupId = null, expires
     return full;
   }
 
-  // Solo flow
-  const expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000).toISOString();
+  // Solo flow — status 'active' means accepted but not started yet
   const { data, error } = await supabase
     .from('quests')
-    .insert({ template_id: templateId, owner_id: ownerId, group_id: null, expires_at: expiresAt })
+    .insert({ template_id: templateId, owner_id: ownerId, group_id: null, status: 'active' })
     .select('*, template:quest_templates(*)')
     .single();
   if (error) throw error;
 
-  // Add the owner as a participant (now allowed by the fixed RLS policy)
   const { error: pErr } = await supabase
     .from('quest_participants')
-    .insert({ quest_id: data.id, user_id: ownerId });
+    .insert({ quest_id: data.id, user_id: ownerId, has_confirmed: true, confirmed_at: new Date().toISOString() });
   if (pErr) console.warn('quest_participants insert (non-fatal):', pErr);
 
   return data;
 }
 
 /**
- * Get user's active (in-progress) quests.
+ * Start a quest — this begins the timer. Sets started_at and deadline_at.
+ * For group quests, this is called automatically when the last member confirms.
+ * For solo quests, called when the user taps "Start".
+ * Returns the new deadline_at timestamp.
+ */
+export async function startQuest(questId) {
+  const { data, error } = await supabase.rpc('start_quest', { _quest_id: questId });
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Confirm participation in a group quest. Returns true if this confirmation
+ * was the final one (quest auto-started); false if still waiting.
+ */
+export async function confirmParticipation(questId) {
+  const { data, error } = await supabase.rpc('confirm_quest_participation', { _quest_id: questId });
+  if (error) throw error;
+  return data;  // true = started, false = still waiting
+}
+
+/**
+ * Get user's in-progress quests (all statuses: active, pending_group_consent, started).
+ * Auto-expires overdue ones in the background.
  */
 export async function getActiveQuests(userId) {
+  // Expire overdue quests first (cheap RPC call)
+  supabase.rpc('expire_overdue_quests').then(() => {}, () => {});
+
+  // Pull all participating quests, not just owned ones (so group members see them too)
   const { data, error } = await supabase
-    .from('quests')
-    .select('*, template:quest_templates(*)')
-    .eq('owner_id', userId)
-    .eq('status', 'active')
-    .order('accepted_at', { ascending: false });
+    .from('quest_participants')
+    .select('quest:quests(*, template:quest_templates(*)), has_confirmed')
+    .eq('user_id', userId);
+
   if (error) {
     console.error('active quests', error);
     return [];
   }
-  return data || [];
+
+  // Filter to in-progress quests only and flatten
+  const quests = (data || [])
+    .map(row => ({ ...row.quest, my_has_confirmed: row.has_confirmed }))
+    .filter(q => q && ['active', 'pending_group_consent', 'started'].includes(q.status))
+    .sort((a, b) => (b.started_at || b.accepted_at).localeCompare(a.started_at || a.accepted_at));
+
+  return quests;
 }
 
 /**
- * Complete a quest — marks the quest done, awards XP to all participants.
- * Returns total XP earned by the calling user.
+ * Complete a quest. REQUIRES a photo post to exist for this quest by this user.
+ * Returns total XP earned. Throws if no photo exists.
  */
 export async function completeQuest({ quest, userId, profile }) {
+  // Verify photo exists — server-side check via the helper function
+  const { data: hasPhoto, error: chkErr } = await supabase.rpc('has_quest_photo', {
+    _quest_id: quest.id, _user_id: userId
+  });
+  if (chkErr) throw chkErr;
+  if (!hasPhoto) throw new Error('Upload a photo first');
+
   const template = quest.template;
   const xpEarned = computeXP({
     baseReward: template.xp_reward,
     rarity: template.rarity,
     streak: profile.current_streak || 0,
-    groupSize: quest.group_id ? 3 : 1 // TODO: fetch actual member count
+    groupSize: quest.group_id ? 3 : 1
   });
 
-  // Mark quest completed
   await supabase
     .from('quests')
     .update({ status: 'completed', completed_at: new Date().toISOString() })
     .eq('id', quest.id);
 
-  // Award XP to the profile in the relevant category
   const xpField = 'xp_' + template.category;
   const currentXP = profile[xpField] || 0;
   await supabase
     .from('profiles')
     .update({
       [xpField]: currentXP + xpEarned,
-      last_active_date: new Date().toISOString().slice(0,10)
+      last_active_date: new Date().toISOString().slice(0, 10)
     })
     .eq('id', userId);
 
-  // TODO: streak update logic, badge checks, group-member XP propagation
   return xpEarned;
 }
