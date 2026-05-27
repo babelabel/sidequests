@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import QuestCard from '../components/QuestCard.jsx';
+import AcceptQuestModal from '../components/AcceptQuestModal.jsx';
 import { getDailyQuests, getActiveQuests, acceptQuest } from '../lib/quests.js';
 import { totalXP, getRank, getNextRank, CATEGORY_META } from '../lib/xp.js';
 
@@ -9,6 +10,7 @@ export default function HomeScreen({ profile, onOpenQuest }) {
   const [picks, setPicks] = useState([]);
   const [active, setActive] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [pendingTemplate, setPendingTemplate] = useState(null);
 
   // Pull today's picks and any in-progress quests on mount and when profile changes
   useEffect(() => {
@@ -35,15 +37,15 @@ export default function HomeScreen({ profile, onOpenQuest }) {
     ? ((aura - rank.min) / (nextRank.min - rank.min)) * 100
     : 100;
 
-  const handleAccept = async (template) => {
-    try {
-      const newQuest = await acceptQuest({ templateId: template.id, ownerId: profile.id });
-      setActive(a => [newQuest, ...a]);
-      onOpenQuest(newQuest.id);
-    } catch (e) {
-      console.error('accept quest', e);
-      alert('Could not accept quest: ' + (e?.message || 'unknown error'));
-    }
+  const handleAccept = (template) => {
+    // Open the modal — it handles the actual acceptance after picking solo/group
+    setPendingTemplate(template);
+  };
+
+  const handleAccepted = (newQuest) => {
+    setPendingTemplate(null);
+    setActive(a => [newQuest, ...a]);
+    onOpenQuest(newQuest.id);
   };
 
   const greeting = (() => {
@@ -137,6 +139,15 @@ export default function HomeScreen({ profile, onOpenQuest }) {
           </div>
         )}
       </section>
+
+      {pendingTemplate && (
+        <AcceptQuestModal
+          template={pendingTemplate}
+          profile={profile}
+          onAccepted={handleAccepted}
+          onClose={() => setPendingTemplate(null)}
+        />
+      )}
     </div>
   );
 }

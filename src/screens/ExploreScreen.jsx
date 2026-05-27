@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { CATEGORY_META } from '../lib/xp.js';
 import QuestCard from '../components/QuestCard.jsx';
-import { acceptQuest } from '../lib/quests.js';
+import AcceptQuestModal from '../components/AcceptQuestModal.jsx';
 
 const serif = { fontFamily: "'Instrument Serif', serif", fontStyle: 'italic' };
 
@@ -10,6 +10,7 @@ export default function ExploreScreen({ profile, onOpenQuest }) {
   const [templates, setTemplates] = useState([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [pendingTemplate, setPendingTemplate] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -26,14 +27,13 @@ export default function ExploreScreen({ profile, onOpenQuest }) {
     ? templates
     : templates.filter(t => t.category === filter);
 
-  const handleAccept = async (template) => {
-    try {
-      const q = await acceptQuest({ templateId: template.id, ownerId: profile.id });
-      onOpenQuest(q.id);
-    } catch (e) {
-      console.error('accept quest', e);
-      alert('Could not accept: ' + (e?.message || 'unknown error'));
-    }
+  const handleAccept = (template) => {
+    setPendingTemplate(template);
+  };
+
+  const handleAccepted = (newQuest) => {
+    setPendingTemplate(null);
+    onOpenQuest(newQuest.id);
   };
 
   return (
@@ -65,6 +65,15 @@ export default function ExploreScreen({ profile, onOpenQuest }) {
             <QuestCard key={t.id} template={t} onClick={() => handleAccept(t)} />
           ))}
         </div>
+      )}
+
+      {pendingTemplate && (
+        <AcceptQuestModal
+          template={pendingTemplate}
+          profile={profile}
+          onAccepted={handleAccepted}
+          onClose={() => setPendingTemplate(null)}
+        />
       )}
     </div>
   );
