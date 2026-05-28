@@ -1,5 +1,6 @@
 import { supabase } from './supabase.js';
 import { computeXP } from './xp.js';
+import { syncBadges, getEarnedBadges } from './progress.js';
 
 /**
  * Get today's quest picks for a user.
@@ -12,11 +13,12 @@ import { computeXP } from './xp.js';
 export async function getDailyQuests(profile) {
   if (!profile) return [];
 
-  // Pull all curated templates
+  // Pull all curated AND active templates
   const { data: templates, error } = await supabase
     .from('quest_templates')
     .select('*')
-    .eq('is_curated', true);
+    .eq('is_curated', true)
+    .neq('is_active', false);
 
   if (error || !templates) {
     console.error('quest templates fetch', error);
@@ -167,16 +169,29 @@ export async function getActiveQuests(userId) {
 }
 
 /**
- * Complete a quest. REQUIRES a photo post to exist for this quest by this user.
- * Returns total XP earned. Throws if no photo exists.
+ * Complete a quest. Server-enforces:
+ *   1. Quest is in 'started' status
+ *   2. Photo post exists for this quest by this user
+ *   3. Minimum elapsed time has passed (50% of estimated, min 60s)
+ *
+ * Returns { xpEarned, newBadges }.
+ * Server enforces: quest is in 'started' status AND user has uploaded a photo.
+ * Throws with the server's error message on failure.
  */
 export async function completeQuest({ quest, userId, profile }) {
-  // Verify photo exists — server-side check via the helper function
-  const { data: hasPhoto, error: chkErr } = await supabase.rpc('has_quest_photo', {
+  // Verify completion is allowed: photo exists AND minimum time elapsed
+  const { data: canComplete, error: chkErr } = await supabase.rpc('can_complete_quest', {
     _quest_id: quest.id, _user_id: userId
   });
   if (chkErr) throw chkErr;
-  if (!hasPhoto) throw new Error('Upload a photo first');
+  if (!canComplete) {
+    // Figure out which condition failed for a helpful message
+    const { data: hasPhoto } = await supabase.rpc('has_quest_photo', {
+      _quest_id: quest.id, _user_id: userId
+    });
+    if (!hasPhoto) throw new Error('Upload a photo first');
+    throw new Error("You can't complete this yet — the minimum time hasn't passed");
+  }
 
   const template = quest.template;
   const xpEarned = computeXP({
@@ -201,5 +216,18 @@ export async function completeQuest({ quest, userId, profile }) {
     })
     .eq('id', userId);
 
-  return xpEarned;
+  // Sync badges after completion (computes + persists newly earned ones).
+  // We pass an updated profile snapshot so XP-threshold badges register immediately.
+  let newBadges = [];
+  try {
+    const updatedProfile = { ...profile, [xpField]: currentXP + xpEarned };
+    const before = await getEarnedBadges(userId);
+    const after = await syncBadges(updatedProfile);
+    const beforeSet = new Set(before);
+    newBadges = after.filter(b => !beforeSet.has(b));
+  } catch (e) {
+    console.warn('badge sync (non-fatal)', e);
+  }
+
+  return { xpEarned, newBadges };
 }
