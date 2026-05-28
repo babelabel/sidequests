@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase.js';
 import { completeQuest, startQuest, confirmParticipation } from '../lib/quests.js';
 import { CATEGORY_META } from '../lib/xp.js';
 import { getCurrentLocation, createQuestPost } from '../lib/photos.js';
+import { getBadgeById } from '../lib/badges.js';
 
 const serif = { fontFamily: "'Instrument Serif', serif", fontStyle: 'italic' };
 
@@ -26,6 +27,7 @@ export default function QuestDetailScreen({ questId, profile, onClose, onComplet
   const [starting, setStarting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [xpEarned, setXpEarned] = useState(null);
+  const [newlyGrantedBadges, setNewlyGrantedBadges] = useState([]);
   const [tick, setTick] = useState(0); // forces re-render for countdown
 
   // Load quest + participants
@@ -81,6 +83,18 @@ export default function QuestDetailScreen({ questId, profile, onClose, onComplet
   };
   const remaining = computeRemaining();
 
+  // Compute time until completion unlocks (the minimum-duration gate)
+  const computeUnlock = () => {
+    if (!quest.unlock_at) return { locked: false };
+    const ms = new Date(quest.unlock_at).getTime() - Date.now();
+    if (ms <= 0) return { locked: false };
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    return { locked: true, h, m, s };
+  };
+  const unlock = computeUnlock();
+
   // ---- ACTIONS ----
 
   const handleStart = async () => {
@@ -111,17 +125,21 @@ export default function QuestDetailScreen({ questId, profile, onClose, onComplet
   };
 
   const handleGoToPost = () => {
-    // Move to photo upload phase — required for completion
+    // The "Complete with photo" button only renders once the unlock time has
+    // passed (handled in LifecycleButton), so we can go straight to the post phase.
     setPhase('post');
   };
 
   const handleCompleteAfterPost = async () => {
     setCompleting(true);
     try {
-      const earned = await completeQuest({ quest, userId: profile.id, profile });
+      const { xpEarned: earned, newBadges } = await completeQuest({ quest, userId: profile.id, profile });
       setXpEarned(earned);
+      setNewlyGrantedBadges(newBadges || []);
       setPhase('success');
-      setTimeout(() => onCompleted(), 2200);
+      // Longer dwell if badges to celebrate
+      const dwell = (newBadges?.length > 0) ? 3500 : 2200;
+      setTimeout(() => onCompleted(), dwell);
     } catch (e) {
       alert('Could not complete: ' + e.message);
       setCompleting(false);
@@ -139,6 +157,30 @@ export default function QuestDetailScreen({ questId, profile, onClose, onComplet
         <h1 style={serif} className="text-5xl mb-2 text-center">Quest complete</h1>
         <p style={serif} className="text-3xl mb-1">+{xpEarned} XP</p>
         <p className="text-sm text-white/80">{meta.label}</p>
+
+        {newlyGrantedBadges.length > 0 && (
+          <div className="mt-8 w-full max-w-sm">
+            <p className="text-[10px] uppercase tracking-[0.3em] text-white/80 text-center mb-3">
+              {newlyGrantedBadges.length === 1 ? 'Badge unlocked' : `${newlyGrantedBadges.length} badges unlocked`}
+            </p>
+            <div className="space-y-2">
+              {newlyGrantedBadges.map(b => {
+                const badgeId = b.badge_id || b;  // handle both shapes
+                const cfg = getBadgeById(badgeId);
+                if (!cfg) return null;
+                return (
+                  <div key={badgeId} className="rounded-2xl px-4 py-3 flex items-center gap-3" style={{ background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(12px)' }}>
+                    <div className="text-3xl">{cfg.icon}</div>
+                    <div className="flex-1 text-left">
+                      <p style={serif} className="text-xl text-white leading-tight">{cfg.name}</p>
+                      <p className="text-[10px] text-white/70">{cfg.desc}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -194,8 +236,24 @@ export default function QuestDetailScreen({ questId, profile, onClose, onComplet
         <p className="text-base leading-relaxed">{t.description}</p>
 
         {/* Status-specific UI */}
-        {quest.status === 'started' && remaining && (
+        {quest.status === 'started' && remaining && !remaining.expired && (
           <CountdownCard remaining={remaining} meta={meta} />
+        )}
+
+        {/* Minimum-duration lock: show how long until completion unlocks */}
+        {quest.status === 'started' && unlock.locked && (
+          <div className="rounded-2xl p-4 flex items-center gap-3" style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.25)' }}>
+            <span className="text-2xl">🔒</span>
+            <div className="flex-1">
+              <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: '#f43f5e' }}>
+                Locked — keep going
+              </p>
+              <p style={serif} className="text-2xl leading-tight">
+                {unlock.h > 0 && `${unlock.h}h `}{String(unlock.m).padStart(2,'0')}m {String(unlock.s).padStart(2,'0')}s
+              </p>
+              <p className="text-xs" style={{ color: '#a1a1aa' }}>until you can submit proof</p>
+            </div>
+          </div>
         )}
 
         {quest.status === 'pending_group_consent' && (
@@ -240,6 +298,7 @@ export default function QuestDetailScreen({ questId, profile, onClose, onComplet
           onConfirm={handleConfirm}
           onGoToPost={handleGoToPost}
           remaining={remaining}
+          unlock={unlock}
         />
       </div>
     </div>
@@ -249,7 +308,7 @@ export default function QuestDetailScreen({ questId, profile, onClose, onComplet
 // ============================================================
 // LIFECYCLE BUTTON — picks the right action for the current quest state
 // ============================================================
-function LifecycleButton({ quest, meta, myHasConfirmed, allConfirmed, starting, confirming, onStart, onConfirm, onGoToPost, remaining }) {
+function LifecycleButton({ quest, meta, myHasConfirmed, allConfirmed, starting, confirming, onStart, onConfirm, onGoToPost, remaining, unlock }) {
   // Solo or group already confirmed — show Start
   if (quest.status === 'active') {
     return (
@@ -294,6 +353,25 @@ function LifecycleButton({ quest, meta, myHasConfirmed, allConfirmed, starting, 
         </div>
       );
     }
+
+    // Minimum-duration gate: if the unlock time hasn't passed, lock the button.
+    if (unlock?.locked) {
+      const label = unlock.h > 0
+        ? `${unlock.h}h ${String(unlock.m).padStart(2, '0')}m`
+        : `${unlock.m}m ${String(unlock.s).padStart(2, '0')}s`;
+      return (
+        <div className="space-y-2">
+          <div className="w-full py-4 rounded-2xl text-center" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#a1a1aa' }}>
+            <p className="text-[10px] uppercase tracking-[0.2em] mb-1" style={{ color: '#71717a' }}>🔒 Locked</p>
+            <p style={serif} className="text-2xl">{label} until you can submit</p>
+          </div>
+          <p className="text-[10px] text-center" style={{ color: '#71717a' }}>
+            Actually do the quest — you can't submit early.
+          </p>
+        </div>
+      );
+    }
+
     return (
       <button
         onClick={onGoToPost}

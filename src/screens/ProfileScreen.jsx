@@ -1,21 +1,44 @@
-import React, { useState } from 'react';
-import { Users, Copy } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Users, Copy, Trophy, Palette } from 'lucide-react';
 import { supabase } from '../lib/supabase.js';
 import { CATEGORY_META, totalXP, getRank, getNextRank } from '../lib/xp.js';
+import { getEarnedBadges, syncBadges } from '../lib/progress.js';
+import { getBadgeById, getTitleById } from '../lib/badges.js';
 
 const serif = { fontFamily: "'Instrument Serif', serif", fontStyle: 'italic' };
 
-export default function ProfileScreen({ profile, onSignOut, onOpenFriends }) {
+export default function ProfileScreen({
+  profile,
+  onSignOut,
+  onOpenFriends,
+  onOpenLeaderboard,
+  onOpenCustomize
+}) {
   const [editing, setEditing] = useState(false);
   const [displayName, setDisplayName] = useState(profile.display_name || '');
   const [username, setUsername] = useState(profile.username);
   const [bio, setBio] = useState(profile.bio || '');
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [myBadges, setMyBadges] = useState([]);
 
   const aura = totalXP(profile);
   const rank = getRank(aura);
   const nextRank = getNextRank(aura);
+
+  const avatarColor = profile.avatar_color || rank.color;
+  const avatarEmoji = profile.avatar_emoji || '🙂';
+  const title = getTitleById(profile.display_title) || { label: rank.name };
+  const featured = profile.featured_badge ? getBadgeById(profile.featured_badge) : null;
+
+  // Sync + load badges on mount (computes newly earned ones, persists them)
+  useEffect(() => {
+    (async () => {
+      await syncBadges(profile);
+      const earned = await getEarnedBadges(profile.id);
+      setMyBadges(earned);
+    })();
+  }, [profile.id]);
 
   const copyCode = () => {
     try {
@@ -32,12 +55,8 @@ export default function ProfileScreen({ profile, onSignOut, onOpenFriends }) {
       .update({ display_name: displayName.trim(), username: username.trim(), bio: bio.trim() })
       .eq('id', profile.id);
     setSaving(false);
-    if (error) {
-      alert(error.message);
-      return;
-    }
+    if (error) { alert(error.message); return; }
     setEditing(false);
-    // Refresh page to pick up the new profile values via useAuth
     window.location.reload();
   };
 
@@ -45,27 +64,41 @@ export default function ProfileScreen({ profile, onSignOut, onOpenFriends }) {
     <div className="space-y-5 pb-4">
       <div className="pt-2 text-center">
         <div
-          className="w-24 h-24 rounded-full mx-auto mb-3 flex items-center justify-center relative"
-          style={{ background: 'rgba(255,255,255,0.05)', border: `2px solid ${rank.color}` }}
+          className="w-24 h-24 rounded-full mx-auto mb-3 flex items-center justify-center text-5xl relative"
+          style={{ background: avatarColor, border: `3px solid ${avatarColor}` }}
         >
-          <span style={serif} className="text-4xl">{(profile.display_name || profile.username)[0].toUpperCase()}</span>
+          {avatarEmoji}
+          {featured && (
+            <div className="absolute -bottom-1 -right-1 w-9 h-9 rounded-full flex items-center justify-center text-lg" style={{ background: '#0a0a0b', border: '2px solid ' + avatarColor }}>
+              {featured.icon}
+            </div>
+          )}
         </div>
 
         {!editing ? (
           <>
             <h1 style={serif} className="text-3xl">{profile.display_name || profile.username}</h1>
             <p className="text-xs" style={{ color: '#a1a1aa' }}>@{profile.username}</p>
-            <p className="text-[10px] uppercase tracking-[0.2em] mt-2" style={{ color: rank.color }}>
-              ★ {rank.name}
+            <p className="text-[10px] uppercase tracking-[0.2em] mt-2" style={{ color: avatarColor }}>
+              {title.label}
             </p>
             {profile.bio && <p className="text-sm mt-3 max-w-xs mx-auto" style={{ color: '#a1a1aa' }}>{profile.bio}</p>}
-            <button
-              onClick={() => setEditing(true)}
-              className="mt-3 text-xs px-3 py-1.5 rounded-full"
-              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
-            >
-              Edit profile
-            </button>
+            <div className="flex gap-2 justify-center mt-3">
+              <button
+                onClick={() => setEditing(true)}
+                className="text-xs px-3 py-1.5 rounded-full"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
+              >
+                Edit info
+              </button>
+              <button
+                onClick={onOpenCustomize}
+                className="text-xs px-3 py-1.5 rounded-full flex items-center gap-1"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
+              >
+                <Palette size={12} /> Customize
+              </button>
+            </div>
           </>
         ) : (
           <div className="max-w-sm mx-auto space-y-2 mt-3">
@@ -133,20 +166,40 @@ export default function ProfileScreen({ profile, onSignOut, onOpenFriends }) {
         })}
       </div>
 
-      {/* Friend code + Friends button */}
+      {/* Badges grid */}
+      <section>
+        <p className="text-xs uppercase tracking-[0.2em] mb-2 px-1" style={{ color: '#71717a' }}>
+          Badges ({myBadges.length})
+        </p>
+        {myBadges.length === 0 ? (
+          <div className="rounded-2xl p-5 text-center" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <p className="text-sm" style={{ color: '#71717a' }}>Complete quests to earn badges.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-4 gap-2">
+            {myBadges.map(bid => {
+              const badge = getBadgeById(bid);
+              if (!badge) return null;
+              return (
+                <div key={bid} className="rounded-2xl p-2 flex flex-col items-center text-center" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <span className="text-2xl mb-1">{badge.icon}</span>
+                  <span className="text-[9px] leading-tight" style={{ color: '#a1a1aa' }}>{badge.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* Leaderboard + Friends + code */}
       <div className="grid grid-cols-2 gap-2">
         <button
-          onClick={copyCode}
-          className="rounded-2xl p-3 text-left"
+          onClick={onOpenLeaderboard}
+          className="rounded-2xl p-3 text-left flex flex-col justify-between"
           style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}
         >
-          <p className="text-[10px] uppercase tracking-widest" style={{ color: '#fbbf24' }}>Your code</p>
-          <p style={{ fontFamily: 'monospace', fontSize: '1.1rem', letterSpacing: '0.15em' }} className="mt-0.5">
-            {profile.friend_code || '------'}
-          </p>
-          <p className="text-[9px] mt-1" style={{ color: '#fbbf24' }}>
-            <Copy size={10} className="inline" /> {copied ? 'copied' : 'tap to copy'}
-          </p>
+          <Trophy size={20} style={{ color: '#fbbf24' }} />
+          <p style={serif} className="text-xl">Leaderboard</p>
         </button>
         <button
           onClick={onOpenFriends}
@@ -157,6 +210,20 @@ export default function ProfileScreen({ profile, onSignOut, onOpenFriends }) {
           <p style={serif} className="text-xl">Friends</p>
         </button>
       </div>
+
+      <button
+        onClick={copyCode}
+        className="w-full rounded-2xl p-3 flex items-center justify-between"
+        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
+      >
+        <div className="text-left">
+          <p className="text-[10px] uppercase tracking-widest" style={{ color: '#71717a' }}>Your friend code</p>
+          <p style={{ fontFamily: 'monospace', fontSize: '1.2rem', letterSpacing: '0.15em' }}>{profile.friend_code || '------'}</p>
+        </div>
+        <span className="text-xs flex items-center gap-1" style={{ color: '#a1a1aa' }}>
+          <Copy size={12} /> {copied ? 'copied' : 'copy'}
+        </span>
+      </button>
 
       <button
         onClick={onSignOut}
