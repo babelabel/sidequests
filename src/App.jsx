@@ -5,12 +5,13 @@ import HomeScreen from './screens/HomeScreen.jsx';
 import QuestDetailScreen from './screens/QuestDetailScreen.jsx';
 import ProfileScreen from './screens/ProfileScreen.jsx';
 import FriendsScreen from './screens/FriendsScreen.jsx';
+import LeaderboardScreen from './screens/LeaderboardScreen.jsx';
+import ProfileCustomizeScreen from './screens/ProfileCustomizeScreen.jsx';
 import ExploreScreen from './screens/ExploreScreen.jsx';
 import GroupsScreen from './screens/GroupsScreen.jsx';
 import FeedScreen from './screens/FeedScreen.jsx';
 import BottomNav from './components/BottomNav.jsx';
 
-// Inject Google Fonts once
 function useFonts() {
   useEffect(() => {
     const link = document.createElement('link');
@@ -26,14 +27,14 @@ export default function App() {
   const { user, profile, loading, refreshProfile } = useAuth();
   const [view, setView] = useState('home');
   const [activeQuestId, setActiveQuestId] = useState(null);
-  const [showFriends, setShowFriends] = useState(false);
+  // Profile sub-pages — only one active at a time
+  const [profileSubPage, setProfileSubPage] = useState(null); // null | 'friends' | 'leaderboard' | 'customize'
 
-  // Wrap signOut to also reset local view state — prevents UI getting stuck
   const handleSignOut = async () => {
     await signOut();
     setView('home');
     setActiveQuestId(null);
-    setShowFriends(false);
+    setProfileSubPage(null);
   };
 
   if (loading) {
@@ -58,7 +59,7 @@ export default function App() {
     );
   }
 
-  // Quest detail is a full-screen overlay
+  // Quest detail full-screen overlay
   if (activeQuestId) {
     return (
       <QuestDetailScreen
@@ -70,14 +71,31 @@ export default function App() {
     );
   }
 
-  // Friends screen is a sub-page of Profile
-  if (showFriends) {
+  // Profile sub-pages — render in same shell with bottom nav still visible
+  const renderSubPage = () => {
+    if (profileSubPage === 'friends') {
+      return <FriendsScreen profile={profile} onClose={() => setProfileSubPage(null)} />;
+    }
+    if (profileSubPage === 'leaderboard') {
+      return <LeaderboardScreen profile={profile} onClose={() => setProfileSubPage(null)} />;
+    }
+    if (profileSubPage === 'customize') {
+      return <ProfileCustomizeScreen
+        profile={profile}
+        onClose={() => setProfileSubPage(null)}
+        onRefresh={refreshProfile}
+      />;
+    }
+    return null;
+  };
+
+  if (profileSubPage) {
     return (
       <div className="min-h-screen pb-20" style={{ background: '#0a0a0b', color: '#fafaf9' }}>
         <div className="max-w-2xl mx-auto px-4 pt-4">
-          <FriendsScreen profile={profile} onClose={() => setShowFriends(false)} />
+          {renderSubPage()}
         </div>
-        <BottomNav view={view} setView={(v) => { setShowFriends(false); setView(v); }} />
+        <BottomNav view={view} setView={(v) => { setProfileSubPage(null); setView(v); }} />
       </div>
     );
   }
@@ -93,7 +111,9 @@ export default function App() {
           <ProfileScreen
             profile={profile}
             onSignOut={handleSignOut}
-            onOpenFriends={() => setShowFriends(true)}
+            onOpenFriends={() => setProfileSubPage('friends')}
+            onOpenLeaderboard={() => setProfileSubPage('leaderboard')}
+            onOpenCustomize={() => setProfileSubPage('customize')}
           />
         )}
       </div>
